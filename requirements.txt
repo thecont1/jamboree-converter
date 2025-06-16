@@ -1,0 +1,11 @@
+nbconvert>=7.16.6
+jupyter
+traitlets
+playwright>=1.52.0
+numpy>=1.24.3
+pandas>=2.0.3
+matplotlib
+weasyprint>=65.1
+pandoc>=3.7.0.2
+ipykernel
+mercury>=2.4.3

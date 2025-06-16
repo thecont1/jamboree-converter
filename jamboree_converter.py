@@ -28,7 +28,7 @@ PAGE_SIZES = {
     'legal': (216, 356), 
     'tabloid': (279, 432), 
     'ledger': (432, 279), 
-    'case_study': (1189, 420)
+    'case_study': (420, 1189)
 }
 
 def create_custom_html_template(page_size, orientation, margins):

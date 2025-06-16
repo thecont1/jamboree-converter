@@ -1,193 +1,237 @@
-# 📄 Notebook Printing Environment Guide
+# 📏 Quickly Convert Jupyter Notebooks into PDFs 
 
-This guide explains how to use the dedicated `notebook-print` conda environment for converting Jupyter notebooks to various formats.
+Here's why you're here: You have a a lengthy Jupyter Notebook (`.ipynb` file) that you want to turn into a PDF that makes for a visually pleasing (or at least bearable) document. And you're looking for a fuss-free tool that will get the job done. 
+
+In goes your notebook into `jamboree_converter.py` and out comes a PDF with a special size of A2 width and A0 height. Check out the included sample.
 
 ## 🚀 Quick Start
 
-### Activate the Environment
+### 1. Install Miniconda (if you don't already have it)
+
+[anaconda.com/docs/getting-started/miniconda/install](https://www.anaconda.com/docs/getting-started/miniconda/install)
+
+The following commands are ought to be run from the command line of your terminal.
+
+### 2. Create a new virtual environment and activate it:
+Replace `my-venv` with whatever you want to call your environment.
 ```bash
-conda activate notebook-print
+conda create -n my-venv python=3.10
+conda activate my-venv
 ```
 
-### Basic Conversions
+### 3. Clone the `jamboree-converter` repo and switch to its directory:
 ```bash
-# PDF via LaTeX (recommended for academic/professional documents)
-python notebook_printer.py notebook.ipynb --format pdf
-
-# Web-based PDF (better for interactive content)
-python notebook_printer.py notebook.ipynb --format webpdf
-
-# HTML export
-python notebook_printer.py notebook.ipynb --format html
-
-# Clean report (no code, only outputs)
-python notebook_printer.py notebook.ipynb --format pdf --no-input --output report
+git clone https://github.com/thecont1/jamboree-converter.git
+cd jamboree-converter
 ```
 
-## 🛠 Environment Details
-
-**Python Version:** 3.10.18  
-**Key Packages:**
-- `nbconvert` 7.16.6 - Core conversion engine
-- `mercury` 2.4.3 - Interactive dashboard creation  
-- `pandoc` 3.7.0.2 - Document conversion
-- `texlive-core` - LaTeX engine for PDF generation
-- `playwright` 1.52.0 - Modern web browser automation
-- `weasyprint` 65.1 - CSS-based PDF generation
-
-## 📋 Available Conversion Methods
-
-### 1. PDF via LaTeX (`--format pdf`)
-**Best for:** Academic papers, professional reports, mathematical content
-- High-quality typography
-- Excellent equation rendering
-- Automatic page breaking
-- Professional appearance
-
-### 2. Web-based PDF (`--format webpdf`)
-**Best for:** Interactive content, modern styling, complex layouts
-- Preserves web styling
-- Better handling of interactive plots
-- Modern CSS support
-- Can handle complex HTML/CSS
-
-### 3. HTML Export (`--format html`)
-**Best for:** Web publishing, interactive viewing
-- Fully interactive plots
-- Responsive design
-- Easy web deployment
-
-## 🎯 Advanced Usage
-
-### Command Line Options
+### 4. Install required packages
 ```bash
-# Create clean report without code
-python notebook_printer.py notebook.ipynb --no-input
-
-# Remove input/output prompts for cleaner look
-python notebook_printer.py notebook.ipynb --no-prompt
-
-# Custom output filename
-python notebook_printer.py notebook.ipynb --output my_report
-
-# Combine options
-python notebook_printer.py notebook.ipynb --format webpdf --no-input --no-prompt --output final_report
+pip install -r requirements.txt
+playwright install chromium
 ```
 
-### Mercury Dashboard
-```bash
-# Start Mercury server for interactive dashboards
-mercury run
+### 5. Convert your first notebook
+Replace `your_notebook.ipynb` with your actual notebook file. Include the full path if the file doesn't exist in your working directory.
 
-# Access at http://localhost:8000
+Basic conversion (produces a nicely formatted PDF)
+```bash
+python jamboree_converter.py your_notebook.ipynb --size case_study --method playwright
 ```
 
-### Direct Python API
-```python
-import nbconvert
+For a cleaner output without code cells
+```bash
+python jamboree_converter.py your_notebook.ipynb --size case_study --method playwright --no-input
+```
 
-# PDF conversion
-exporter = nbconvert.PDFExporter()
-(body, resources) = exporter.from_filename('notebook.ipynb')
-with open('output.pdf', 'wb') as f:
-    f.write(body)
+## 📐 Available Page Sizes
 
-# WebPDF conversion
-exporter = nbconvert.WebPDFExporter()
-exporter.allow_chromium_download = True
-(body, resources) = exporter.from_filename('notebook.ipynb')
-with open('output.pdf', 'wb') as f:
-    f.write(body)
+| Size | Dimensions (mm) | Best For |
+|------|----------------|----------|
+| **A4** | 210 × 297 | Standard documents, reports |
+| **A3** | 297 × 420 | Data analysis, charts |
+| **A2** | 420 × 594 | Large datasets, dashboards |
+| **A1** | 594 × 841 | Posters, presentations |
+| **A0** | 841 × 1189 | Large format posters |
+| **Letter** | 216 × 279 | US standard |
+| **Legal** | 216 × 356 | US legal documents |
+| **Tabloid** | 279 × 432 | Newspapers, large prints |
+| `case_study` | 420 × 1189 | Custom size for lengthy Jupyter Notebooks |
+
+
+## 🎯 Methods Available
+
+### 1. WebPDF
+**Best for:** Modern styling, complex layouts, interactive content
+- Uses Chromium browser engine
+- CSS-based page size control
+- Excellent rendering quality
+- Handles complex HTML/CSS
+
+```bash
+$ python jamboree_converter.py notebook.ipynb --size a3 --method webpdf
+```
+
+### 2. LaTeX PDF
+**Best for:** Academic documents, mathematical content
+- Traditional LaTeX typesetting
+- High-quality equation rendering
+- Professional typography
+- Better for text-heavy documents
+
+```bash
+$ python jamboree_converter.py notebook.ipynb --size a3 --method latex
+```
+
+### 3. Playwright
+**Best for:** Precise page control and modern web content
+- Direct browser automation
+- Excellent rendering consistency
+- Perfect for complex layouts
+- Handles dynamic content well
+
+```bash
+$ python jamboree_converter.py notebook.ipynb --size a3 --method playwright
+```
+
+### 4. Mercury
+**Best for:** Interactive dashboards and sharing
+- Creates interactive web dashboards
+- Shareable via URL
+- Real-time updates
+- Great for collaborative work
+
+```bash
+$ python jamboree_converter.py notebook.ipynb --method mercury
+```
+
+## 📋 Common Use Cases
+
+### Data Science Reports
+```bash
+# A3 portrait for standard data analysis
+$ python jamboree_converter.py analysis.ipynb --size a3
+
+# A2 landscape for wide visualizations
+$ python jamboree_converter.py dashboard.ipynb --size a2 --orientation landscape
+
+# Clean report without code
+$ python jamboree_converter.py report.ipynb --size a3 --no-input
+```
+
+### Academic Papers
+```bash
+# A4 with LaTeX for academic formatting
+$ python jamboree_converter.py paper.ipynb --size a4 --method latex
+
+# Remove prompts for cleaner look
+$ python jamboree_converter.py paper.ipynb --size a4 --no-prompt
+```
+
+### Presentations & Posters
+```bash
+# A1 landscape for poster
+$ python jamboree_converter.py poster.ipynb --size a1 --orientation landscape
+
+# A0 for large format
+$ python jamboree_converter.py poster.ipynb --size a0
+```
+
+## ⚙️ Advanced Options
+
+### Custom Margins
+```bash
+# Larger margins
+$ python jamboree_converter.py notebook.ipynb --size a3 --margins 30mm
+
+# Different units
+$ python jamboree_converter.py notebook.ipynb --size a3 --margins 1in
+$ python jamboree_converter.py notebook.ipynb --size a3 --margins 2cm
+```
+
+### Content Control
+```bash
+# Exclude code cells (report mode)
+$ python jamboree_converter.py notebook.ipynb --size a3 --no-input
+
+# Exclude input/output prompts
+$ python jamboree_converter.py notebook.ipynb --size a3 --no-prompt
+
+# Both (cleanest output)
+$ python jamboree_converter.py notebook.ipynb --size a3 --no-input --no-prompt
+```
+
+### Custom Output Names
+```bash
+# Custom filename
+$ python jamboree_converter.py notebook.ipynb --size a3 --output final_report
+
+# Will create: final_report.pdf
+```
+
+## 🎨 Page Size Recommendations
+
+### By Content Type
+
+**📊 Data Visualizations:**
+- **A3 Portrait**: Standard charts, medium datasets
+- **A2 Landscape**: Wide charts, time series, correlation matrices
+- **A1 Landscape**: Large datasets, complex dashboards
+
+**📝 Text Reports:**
+- **A4 Portrait**: Standard reports, documentation
+- **A3 Portrait**: Reports with embedded charts
+- **Legal**: US-style reports
+
+**🎯 Presentations:**
+- **A3 Landscape**: Slide-style layout
+- **A2 Landscape**: Large presentation format
+- **Tabloid**: Newspaper-style layout
+
+**🔬 Academic/Scientific:**
+- **A4 Portrait**: Papers, articles (LaTeX method)
+- **A3 Portrait**: Lab reports with data
+- **A1/A0**: Conference posters
+
+## 📏 Size Comparison Visual
+
+```
+A0: █████████████████████ (841×1189mm)
+A1: ██████████████       (594×841mm)
+A2: ██████████           (420×594mm)  
+A3: ███████              (297×420mm)  ← Great for data science
+A4: █████                (210×297mm)  ← Standard
+A5: ███                  (148×210mm)
 ```
 
 ## 🔧 Troubleshooting
 
 ### Common Issues
 
-**1. LaTeX errors:**
-- Install missing LaTeX packages: `tlmgr install <package>`
-- Use webpdf format as alternative
-
-**2. Large notebooks timing out:**
-- Split notebook into smaller sections
-- Use PDF format instead of webpdf
-- Increase timeout in code
-
-**3. Missing fonts:**
-- Fonts are included in the environment
-- For custom fonts, add to system font directory
-
-### Environment Management
+**WebPDF timeout:**
 ```bash
-# Update packages
-conda update --all -c conda-forge
-
-# Install additional packages
-conda install -c conda-forge package_name
-
-# List installed packages
-conda list
-
-# Environment info
-conda info --envs
+# For very large notebooks, use LaTeX method
+$ python jamboree_converter.py large_notebook.ipynb --size a3 --method latex
 ```
 
-## 📁 File Organization
-
-```
-project/
-├── notebook.ipynb              # Source notebook
-├── notebook_printer.py         # Conversion utility
-├── output_pdf.pdf             # LaTeX PDF output
-├── output_webpdf.pdf          # Web PDF output  
-├── output_html.html           # HTML output
-└── clean_report.pdf           # Report without code
-```
-
-## 🎨 Customization
-
-### Custom Templates
-Create custom LaTeX or HTML templates:
+**LaTeX errors:**
 ```bash
-# Use custom template
-jupyter nbconvert --to pdf notebook.ipynb --template custom_template.tplx
+# Use WebPDF method instead
+$ python jamboree_converter.py notebook.ipynb --size a3 --method webpdf
 ```
 
-### Styling Options
-```python
-# Custom CSS for HTML
-exporter = nbconvert.HTMLExporter()
-exporter.template_file = 'custom_template.html.j2'
-
-# Custom LaTeX styling
-exporter = nbconvert.PDFExporter()
-exporter.template_file = 'custom_template.tex.j2'
-```
-
-## 🔄 Workflow Integration
-
-### Automated Conversion
-Create a script for batch processing:
+**Content too small:**
 ```bash
-#!/bin/bash
-for notebook in *.ipynb; do
-    python notebook_printer.py "$notebook" --format pdf --no-input
-done
+# Reduce margins for more content space
+$ python jamboree_converter.py notebook.ipynb --size a3 --margins 15mm
 ```
 
-### CI/CD Integration
-Add to your build pipeline:
-```yaml
-# GitHub Actions example
-- name: Convert notebooks
-  run: |
-    conda activate notebook-print
-    python notebook_printer.py report.ipynb --format pdf
+## 📄 File Organization
+
+The converter automatically creates descriptive filenames:
+
 ```
-
----
-
-**Environment created:** `notebook-print`  
-**Python version:** 3.10.18  
-**Compatible with:** Mercury, Pandoc, LaTeX, Modern browsers
-
+notebook.ipynb → notebook_webpdf_a3_portrait.pdf
+notebook.ipynb → notebook_latex_a2_landscape.pdf
+notebook.ipynb → custom_name.pdf (with --output)
+```
