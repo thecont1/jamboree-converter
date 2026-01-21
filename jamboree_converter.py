@@ -304,6 +304,11 @@ def convert_with_playwright_direct(notebook_file, page_size='a4', orientation='p
                 message=r"Your element with mimetype\(s\) dict_keys\(\['application/vnd\.plotly\.v1\+json'\]\) is not able to be represented\.",
                 category=UserWarning,
             )
+            warnings.filterwarnings(
+                "ignore",
+                message=r"IPython3 lexer unavailable, falling back on Python 3",
+                category=UserWarning,
+            )
             # Convert from a temporary notebook file so we don't mutate the source file.
             temp_notebook_file = None
             with tempfile.NamedTemporaryFile(mode='w', suffix='.ipynb', delete=False) as nf:
@@ -359,15 +364,6 @@ def convert_with_playwright_direct(notebook_file, page_size='a4', orientation='p
         except ModuleNotFoundError:
             plotly_src = None
 
-        # Optional offline MathJax: point this env var to MathJax's tex-mml-chtml.js
-        # Example:
-        #   export JAMBOREE_MATHJAX_JS=/absolute/path/to/mathjax/es5/tex-mml-chtml.js
-        mathjax_src = None
-        env_mathjax = os.environ.get('JAMBOREE_MATHJAX_JS')
-        if env_mathjax:
-            p = Path(env_mathjax).expanduser()
-            if p.exists():
-                mathjax_src = p.as_uri()
         plotly_script = """
         __PLOTLY_SCRIPT_TAG__
         <script>
@@ -525,17 +521,7 @@ def convert_with_playwright_direct(notebook_file, page_size='a4', orientation='p
 
         plotly_script = plotly_script.replace('__PLOTLY_SCRIPT_TAG__', plotly_script_tag)
 
-        if has_math:
-            if mathjax_src:
-                mathjax_tag = f'<script src="{mathjax_src}"></script>'
-            else:
-                # Last resort: CDN (may be blocked in some environments)
-                mathjax_tag = '<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>'
-
-            plotly_script = plotly_script.replace(
-                '</script>',
-                '</script>\n        ' + mathjax_tag
-            )
+        # Math rendering is expected to be handled by the notebook/nbconvert output.
         
         # Inject CSS and Plotly script into HTML
         html_with_css = html_body.replace('</head>', page_css + plotly_script + '</head>')
@@ -589,19 +575,7 @@ def convert_with_playwright_direct(notebook_file, page_size='a4', orientation='p
                         print("ℹ️  No Plotly charts found in this notebook")
 
                     if has_math:
-                        print("⏳ Waiting for MathJax to render formulas...")
-                        try:
-                            page.wait_for_function(
-                                "typeof MathJax !== 'undefined' && MathJax.typesetPromise !== undefined",
-                                timeout=40000,
-                            )
-                            page.evaluate("() => MathJax.typesetPromise()")
-                            page.wait_for_timeout(500)
-                            print("✓ MathJax rendering complete")
-                        except Exception as e:
-                            print(f"⚠️  MathJax wait skipped (CDN blocked/slow?): {e}")
-                    else:
-                        print("ℹ️  No MathJax/TeX detected; skipping MathJax wait")
+                        print("ℹ️  Math detected; relying on notebook/nbconvert rendering (no MathJax)")
 
                     page.wait_for_timeout(500)
                     page.pdf(
@@ -654,33 +628,37 @@ def convert_with_playwright_direct(notebook_file, page_size='a4', orientation='p
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Working page size converter for Jupyter notebooks",
+        description="Convert a Jupyter notebook (.ipynb) into a PDF with a chosen paper size (uses Playwright by default).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Methods:
-  template   - Custom HTML template with CSS (recommended)
-  playwright - Direct Playwright control (most reliable)
-  both       - Try both methods
+  playwright - Recommended: HTML -> PDF via Playwright (good CSS + reliable Plotly rendering)
+  template   - Legacy: nbconvert WebPDF template-based pipeline
+  both       - Run both methods to compare output
+
+Notes:
+  - Plotly charts are rendered offline when the Python 'plotly' package is installed.
+  - Math is expected to be rendered by the notebook/nbconvert output (no MathJax step).
 
 Examples:
-  python working_page_converter.py notebook.ipynb --size a3
-  python working_page_converter.py notebook.ipynb --size a2 --orientation landscape
-  python working_page_converter.py notebook.ipynb --size a1 --method playwright
+  python jamboree_converter.py notebook.ipynb --size a3
+  python jamboree_converter.py notebook.ipynb --size a2 --orientation landscape
+  python jamboree_converter.py notebook.ipynb --size case_study --no-code --no-prompts
         """
     )
     
     parser.add_argument('notebook', nargs='?', help='Input notebook file (.ipynb)')
     parser.add_argument('--size', '-s', choices=list(PAGE_SIZES.keys()), 
-                       default='a4', help='Page size (default: a4)')
+                       default='a4', help='Page size preset (default: a4)')
     parser.add_argument('--orientation', choices=['portrait', 'landscape'], 
                        default='portrait', help='Page orientation (default: portrait)')
     parser.add_argument('--method', choices=['template', 'playwright', 'both'], 
                        default='playwright', help='Conversion method (default: playwright)')
-    parser.add_argument('--output', '-o', help='Output filename (without extension)')
-    parser.add_argument('--margins', default='20mm', help='Page margins (default: 20mm)')
-    parser.add_argument('--no-input', action='store_true', help='Exclude code cells')
-    parser.add_argument('--no-prompt', action='store_true', help='Exclude prompts')
-    parser.add_argument('--list-sizes', action='store_true', help='List available page sizes')
+    parser.add_argument('--output', '-o', help='Output filename (without extension). The program will add .pdf')
+    parser.add_argument('--margins', default='20mm', help='Page margins CSS value (default: 20mm)')
+    parser.add_argument('--no-code', action='store_true', help='Hide code cells (input). Useful for report-style PDFs')
+    parser.add_argument('--no-prompts', action='store_true', help='Hide input/output prompts (In [1], Out [1])')
+    parser.add_argument('--list-sizes', action='store_true', help='List available page sizes and exit')
     
     args = parser.parse_args()
     
@@ -714,7 +692,7 @@ Examples:
         result = convert_with_working_pagesize(
             args.notebook, args.size, args.orientation,
             args.margins, args.output,
-            no_input=args.no_input, no_prompt=args.no_prompt
+            no_input=args.no_code, no_prompt=args.no_prompts
         )
         success = success and result
     
@@ -725,7 +703,7 @@ Examples:
         result = convert_with_playwright_direct(
             args.notebook, args.size, args.orientation,
             args.margins, args.output,
-            no_input=args.no_input, no_prompt=args.no_prompt
+            no_input=args.no_code, no_prompt=args.no_prompts
         )
         success = success and result
     

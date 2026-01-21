@@ -9,4 +9,6 @@ dependencies = [
     "plotly>=5.18.0",
     "playwright>=1.52.0",
     "traitlets",
+    "bleach>=6",
+    "ipython>=8.0.0",
 ]
