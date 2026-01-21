@@ -1,1 +1,4 @@
+__pychche__/
+vendor/
+.env
 .DS_Store

@@ -10,6 +10,8 @@ import os
 import sys
 import argparse
 import tempfile
+import re
+import warnings
 from pathlib import Path
 
 import nbconvert
@@ -244,6 +246,7 @@ def convert_with_playwright_direct(notebook_file, page_size='a4', orientation='p
     
     try:
         from playwright.sync_api import sync_playwright
+        import json
         
         # Get dimensions
         if page_size.lower() in PAGE_SIZES:
@@ -258,8 +261,34 @@ def convert_with_playwright_direct(notebook_file, page_size='a4', orientation='p
         
         print(f"📄 Playwright: {page_size.upper()} {orientation} ({width}×{height}mm)")
         
-        # First convert to HTML
+        # Read notebook to extract Plotly data
+        print("📖 Reading notebook and extracting Plotly charts...")
+        with open(notebook_file, 'r') as f:
+            notebook = json.load(f)
+        
+        # Extract all Plotly outputs and inject deterministic placeholders so charts render in-place.
+        plotly_charts = []
+        plotly_index = 0
+        for cell in notebook.get('cells', []):
+            if cell.get('cell_type') == 'code':
+                for output in cell.get('outputs', []):
+                    if 'data' in output and 'application/vnd.plotly.v1+json' in output['data']:
+                        plotly_charts.append(output['data']['application/vnd.plotly.v1+json'])
+                        placeholder_id = f"jamboree-plotly-{plotly_index}"  # deterministic ordering
+                        plotly_index += 1
+
+                        if 'data' not in output:
+                            output['data'] = {}
+                        output['data']['text/html'] = f'<div id="{placeholder_id}" class="jamboree-plotly-placeholder"></div>'
+        
+        print(f"📊 Found {len(plotly_charts)} Plotly chart(s) in notebook")
+        
+        # First convert to HTML - no custom template needed
         config = Config()
+        
+        # Use the classic template which handles outputs better
+        config.HTMLExporter.template_name = 'classic'
+        
         exporter = HTMLExporter(config=config)
         
         if kwargs.get('no_input', False):
@@ -269,7 +298,28 @@ def convert_with_playwright_direct(notebook_file, page_size='a4', orientation='p
             exporter.exclude_output_prompt = True
         
         print("🔄 Converting to HTML...")
-        (html_body, resources) = exporter.from_filename(notebook_file)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r"Your element with mimetype\(s\) dict_keys\(\['application/vnd\.plotly\.v1\+json'\]\) is not able to be represented\.",
+                category=UserWarning,
+            )
+            # Convert from a temporary notebook file so we don't mutate the source file.
+            temp_notebook_file = None
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.ipynb', delete=False) as nf:
+                json.dump(notebook, nf)
+                temp_notebook_file = nf.name
+
+            try:
+                (html_body, resources) = exporter.from_filename(temp_notebook_file)
+            finally:
+                try:
+                    if temp_notebook_file:
+                        os.unlink(temp_notebook_file)
+                except Exception:
+                    pass
+
+        has_math = bool(re.search(r"\\\(|\\\[|\$\$|\\begin\{", html_body))
         
         # Add page size CSS to HTML
         page_css = f"""
@@ -289,63 +339,310 @@ def convert_with_playwright_direct(notebook_file, page_size='a4', orientation='p
             max-width: none;
             width: 100%;
         }}
+        /* Preserve math rendering */
+        .MathJax, .MathJax_Display, mjx-container {{
+            overflow-x: auto;
+            overflow-y: visible;
+        }}
         </style>
         """
         
-        # Inject CSS into HTML
-        html_with_css = html_body.replace('</head>', page_css + '</head>')
+        # Embed Plotly charts data and library
+        plotly_data_json = json.dumps(plotly_charts)
+
+        plotly_src = None
+        try:
+            import plotly  # type: ignore
+            candidate = Path(plotly.__file__).parent / 'package_data' / 'plotly.min.js'
+            if candidate.exists():
+                plotly_src = candidate.as_uri()
+        except ModuleNotFoundError:
+            plotly_src = None
+
+        # Optional offline MathJax: point this env var to MathJax's tex-mml-chtml.js
+        # Example:
+        #   export JAMBOREE_MATHJAX_JS=/absolute/path/to/mathjax/es5/tex-mml-chtml.js
+        mathjax_src = None
+        env_mathjax = os.environ.get('JAMBOREE_MATHJAX_JS')
+        if env_mathjax:
+            p = Path(env_mathjax).expanduser()
+            if p.exists():
+                mathjax_src = p.as_uri()
+        plotly_script = """
+        __PLOTLY_SCRIPT_TAG__
+        <script>
+        // Embedded Plotly chart data
+        var plotlyChartsData = __PLOTLY_DATA_JSON__;
+        window.plotlyRenderingComplete = false;
+        window.plotlyRenderedCount = 0;
+        window.plotlyRenderStarted = false;
+        window.plotlyRenderFailed = false;
+        window.plotlyLastError = null;
+        window.plotlyLoadStartTime = Date.now();
+
+        function markPlotlyComplete() {
+            window.plotlyRenderingComplete = true;
+        }
+
+        function renderPlotlyCharts() {
+            if (window.plotlyRenderStarted) return;
+
+            if (plotlyChartsData.length === 0) {
+                markPlotlyComplete();
+                return;
+            }
+
+            if (typeof Plotly === 'undefined') {
+                if ((Date.now() - window.plotlyLoadStartTime) > 60000) {
+                    console.warn('Plotly did not load within 60s; skipping chart rendering');
+                    window.plotlyRenderFailed = true;
+                    markPlotlyComplete();
+                    return;
+                }
+                // Plotly might still be loading (CDN slow/blocked). Retry for a while.
+                setTimeout(renderPlotlyCharts, 250);
+                return;
+            }
+
+            window.plotlyRenderStarted = true;
+            console.log('Found ' + plotlyChartsData.length + ' Plotly charts to render');
+
+            // Prefer deterministic in-place placeholders injected into the notebook outputs.
+            var candidates = Array.from(document.querySelectorAll('.jamboree-plotly-placeholder'));
+
+            // If nbconvert didn't include any recognizable placeholders, render at the end
+            if (candidates.length === 0) {
+                console.warn('No Plotly placeholders detected in HTML; rendering charts at end of document');
+                var container = document.createElement('div');
+                container.id = 'plotly-fallback-container';
+                document.body.appendChild(container);
+                candidates = [container];
+            }
+
+            var chartIndex = 0;
+
+            function renderInto(targetArea, chartData) {
+                var div = document.createElement('div');
+                div.className = 'plotly-graph-div';
+                div.style.width = '100%';
+                div.style.height = '500px';
+                div.style.marginBottom = '20px';
+
+                // Replace placeholder contents with the chart div
+                targetArea.innerHTML = '';
+                targetArea.appendChild(div);
+
+                return Plotly.newPlot(div, chartData.data, chartData.layout, {
+                    responsive: true,
+                    displayModeBar: false
+                });
+            }
+
+            // Render charts into detected candidates first, then append remaining to end
+            for (var i = 0; i < candidates.length && chartIndex < plotlyChartsData.length; i++) {
+                (function(area, data) {
+                    try {
+                        console.log('Rendering chart ' + (chartIndex + 1));
+                        renderInto(area, data).then(function() {
+                            window.plotlyRenderedCount++;
+                            if (window.plotlyRenderedCount >= plotlyChartsData.length) {
+                                console.log('All Plotly charts rendering complete!');
+                                markPlotlyComplete();
+                            }
+                        }).catch(function(e) {
+                            console.error('Failed to render chart:', e);
+                            window.plotlyLastError = String(e);
+                            window.plotlyRenderedCount++;
+                            if (window.plotlyRenderedCount >= plotlyChartsData.length) markPlotlyComplete();
+                        });
+                    } catch (e) {
+                        console.error('Failed to render chart:', e);
+                        window.plotlyLastError = String(e);
+                        window.plotlyRenderedCount++;
+                        if (window.plotlyRenderedCount >= plotlyChartsData.length) markPlotlyComplete();
+                    }
+                })(candidates[i], plotlyChartsData[chartIndex]);
+                chartIndex++;
+            }
+
+            if (chartIndex < plotlyChartsData.length) {
+                var fallbackContainer = document.getElementById('plotly-fallback-container');
+                if (!fallbackContainer) {
+                    fallbackContainer = document.createElement('div');
+                    fallbackContainer.id = 'plotly-fallback-container';
+                    document.body.appendChild(fallbackContainer);
+                }
+
+                for (; chartIndex < plotlyChartsData.length; chartIndex++) {
+                    (function(data) {
+                        try {
+                            var holder = document.createElement('div');
+                            fallbackContainer.appendChild(holder);
+                            renderInto(holder, data).then(function() {
+                                window.plotlyRenderedCount++;
+                                if (window.plotlyRenderedCount >= plotlyChartsData.length) markPlotlyComplete();
+                            }).catch(function(e) {
+                                console.error('Failed to render chart (fallback):', e);
+                                window.plotlyLastError = String(e);
+                                window.plotlyRenderedCount++;
+                                if (window.plotlyRenderedCount >= plotlyChartsData.length) markPlotlyComplete();
+                            });
+                        } catch (e) {
+                            console.error('Failed to render chart (fallback):', e);
+                            window.plotlyLastError = String(e);
+                            window.plotlyRenderedCount++;
+                            if (window.plotlyRenderedCount >= plotlyChartsData.length) markPlotlyComplete();
+                        }
+                    })(plotlyChartsData[chartIndex]);
+                }
+            }
+
+            // Fallback: mark complete after timeout even if promises don't resolve
+            setTimeout(function() {
+                if (!window.plotlyRenderingComplete) {
+                    console.warn('Plotly rendering timeout fallback triggered');
+                    window.plotlyRenderFailed = true;
+                    markPlotlyComplete();
+                }
+            }, 120000);
+        }
         
-        # Write temporary HTML file
+        // Start rendering after DOM is ready; actual chart rendering waits until Plotly exists.
+        if (document.readyState === 'complete' || document.readyState === 'interactive') {
+            renderPlotlyCharts();
+        } else {
+            document.addEventListener('DOMContentLoaded', renderPlotlyCharts);
+        }
+        </script>
+        """.replace('__PLOTLY_DATA_JSON__', plotly_data_json)
+
+        plotly_script_tag = ''
+        if plotly_src:
+            plotly_script_tag = f'<script src="{plotly_src}" charset="utf-8"></script>'
+        else:
+            # Last resort: CDN (may be blocked in some environments)
+            plotly_script_tag = '<script src="https://cdn.plot.ly/plotly-2.32.0.min.js" charset="utf-8"></script>'
+
+        plotly_script = plotly_script.replace('__PLOTLY_SCRIPT_TAG__', plotly_script_tag)
+
+        if has_math:
+            if mathjax_src:
+                mathjax_tag = f'<script src="{mathjax_src}"></script>'
+            else:
+                # Last resort: CDN (may be blocked in some environments)
+                mathjax_tag = '<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>'
+
+            plotly_script = plotly_script.replace(
+                '</script>',
+                '</script>\n        ' + mathjax_tag
+            )
+        
+        # Inject CSS and Plotly script into HTML
+        html_with_css = html_body.replace('</head>', page_css + plotly_script + '</head>')
+
+        debug_html = None
+        if os.environ.get('JAMBOREE_DEBUG_HTML') == '1':
+            debug_html = Path(notebook_file).stem + '_debug.html'
+            with open(debug_html, 'w') as f:
+                f.write(html_with_css)
+            print(f"📝 Debug HTML saved: {debug_html}")
+
         with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False) as f:
             f.write(html_with_css)
             html_file = f.name
-        
+
         try:
-            # Generate filename
             if output_file is None:
                 base = Path(notebook_file).stem
                 size_suffix = f"_{page_size}_{orientation}" if page_size != 'a4' or orientation != 'portrait' else ""
                 output_file = f"{base}_playwright{size_suffix}.pdf"
             else:
                 output_file = output_file + '.pdf'
-            
+
             print("🎭 Converting HTML to PDF with Playwright...")
-            
-            # Convert HTML to PDF with Playwright
+
             with sync_playwright() as p:
-                browser = p.chromium.launch()
-                page = browser.new_page()
-                
-                # Navigate to HTML file
-                page.goto(f"file://{html_file}")
-                
-                # Generate PDF with specific page size
-                page.pdf(
-                    path=output_file,
-                    format=None,  # Use custom size
-                    width=f"{width}mm",
-                    height=f"{height}mm",
-                    margin={
-                        "top": margins,
-                        "right": margins,
-                        "bottom": margins,
-                        "left": margins
-                    },
-                    print_background=True
-                )
-                
-                browser.close()
-            
+                browser = None
+                page = None
+                try:
+                    browser = p.chromium.launch()
+                    page = browser.new_page()
+
+                    # Avoid networkidle hangs when CDNs are blocked; rely on local assets where possible.
+                    page.goto(f"file://{html_file}", wait_until="load")
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=5000)
+                    except Exception:
+                        pass
+
+                    if len(plotly_charts) > 0:
+                        print(f"⏳ Waiting for {len(plotly_charts)} Plotly chart(s) to render...")
+                        try:
+                            page.wait_for_function("typeof Plotly !== 'undefined'", timeout=60000)
+                            page.wait_for_function("window.plotlyRenderingComplete === true", timeout=180000)
+                            page.wait_for_timeout(500)
+                            print(f"✓ All {len(plotly_charts)} Plotly charts rendered")
+                        except Exception as e:
+                            print(f"⚠️  Plotly rendering timeout: {e}")
+                            print("    Continuing anyway - some charts may be missing")
+                    else:
+                        print("ℹ️  No Plotly charts found in this notebook")
+
+                    if has_math:
+                        print("⏳ Waiting for MathJax to render formulas...")
+                        try:
+                            page.wait_for_function(
+                                "typeof MathJax !== 'undefined' && MathJax.typesetPromise !== undefined",
+                                timeout=40000,
+                            )
+                            page.evaluate("() => MathJax.typesetPromise()")
+                            page.wait_for_timeout(500)
+                            print("✓ MathJax rendering complete")
+                        except Exception as e:
+                            print(f"⚠️  MathJax wait skipped (CDN blocked/slow?): {e}")
+                    else:
+                        print("ℹ️  No MathJax/TeX detected; skipping MathJax wait")
+
+                    page.wait_for_timeout(500)
+                    page.pdf(
+                        path=output_file,
+                        format=None,
+                        width=f"{width}mm",
+                        height=f"{height}mm",
+                        margin={
+                            "top": margins,
+                            "right": margins,
+                            "bottom": margins,
+                            "left": margins,
+                        },
+                        print_background=True,
+                    )
+
+                finally:
+                    try:
+                        if page is not None:
+                            page.close()
+                    except Exception:
+                        pass
+                    try:
+                        if browser is not None:
+                            browser.close()
+                    except Exception:
+                        pass
+
             file_size = os.path.getsize(output_file) / (1024 * 1024)
             print(f"✅ Created: {output_file} ({file_size:.1f} MB)")
-            
             return True
-            
+
         finally:
-            # Clean up HTML file
             try:
                 os.unlink(html_file)
-            except:
+            except Exception:
+                pass
+            try:
+                if debug_html:
+                    os.unlink(debug_html)
+            except Exception:
                 pass
                 
     except ImportError:
